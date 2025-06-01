@@ -1,0 +1,80 @@
+name: Convert Video to HLS
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobId:
+        description: 'Job ID'
+        required: true
+      fileName:
+        description: 'File name'
+        required: true
+      originalName:
+        description: 'Original file name'
+        required: true
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Install FFmpeg
+      run: |
+        sudo apt update
+        sudo apt install -y ffmpeg
+        
+    - name: Convert video to HLS
+      run: |
+        # Create output directory
+        mkdir -p hls_output
+
+        # Convert video to HLS format
+        ffmpeg -i "videos/${{ github.event.inputs.fileName }}" \
+          -c:v libx264 \
+          -c:a aac \
+          -hls_time 10 \
+          -hls_list_size 0 \
+          -hls_segment_filename "hls_output/segment_%03d.ts" \
+          "hls_output/playlist.m3u8"
+          
+    - name: Upload to FTP
+      run: |
+        # Install lftp for FTP operations
+        sudo apt install -y lftp
+        
+        # Upload HLS files to FTP server
+        lftp -c "
+          set ftp:ssl-allow no;
+          open -u convert@pixelfile.in,Dipankar@123 ftp.pixelfile.in;
+          mkdir -p ${{ github.event.inputs.jobId }};
+          cd ${{ github.event.inputs.jobId }};
+          mput hls_output/*;
+          quit
+        "
+        
+    - name: Notify completion
+      run: |
+        # Send webhook to notify completion
+        curl -X POST "${{ secrets.WEBHOOK_URL || 'https://your-app-url.com' }}/api/webhook/github" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "jobId": "${{ github.event.inputs.jobId }}",
+            "status": "completed",
+            "hlsUrl": "https://pixelfile.in/${{ github.event.inputs.jobId }}/playlist.m3u8"
+          }'
+          
+    - name: Cleanup
+      run: |
+        # Remove video file from repository
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git rm "videos/${{ github.event.inputs.fileName }}"
+        git commit -m "Clean up video file after conversion"
+        git push
+        
+        # Remove local files
+        rm -rf hls_output
+        rm -f "videos/${{ github.event.inputs.fileName }}"
